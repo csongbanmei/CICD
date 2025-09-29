@@ -11,12 +11,16 @@ pipeline {
     stages {
         stage('1. 📥 拉取代码') {
             steps {
-                echo '从GitHub拉取公开代码...'
-                // 直接使用公开仓库URL，无需凭证
-                git url: 'https://github.com/csongbanmei/CICD.git', branch: 'main1'
-
-                // 显示拉取的文件
-                sh 'ls -la'
+                echo '从GitHub拉取代码...'
+                // 使用SSH方式，避免HTTPS网络问题
+                sh '''
+                    rm -rf CICD || true
+                    git clone git@github.com:csongbanmei/CICD.git
+                    cd CICD
+                    git checkout main1
+                    echo "代码拉取完成"
+                    ls -la
+                '''
             }
         }
 
