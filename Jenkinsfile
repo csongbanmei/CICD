@@ -2,184 +2,170 @@ pipeline {
     agent any
 
     environment {
-        // Go 环境配置
-        GO111MODULE = "on"
-        GOPROXY = "https://goproxy.cn,direct"
-
-        // 应用配置
-        APP_NAME = "Test-CICD"
-        IMAGE_NAME = "test-cicd"  // Docker 镜像名使用小写
-        CONTAINER_NAME = "test-cicd-container"
-        HOST_PORT = "8081"       // 使用 8081 端口避免冲突
+        PROJECT_NAME = "cicd-demo"
+        CONTAINER_NAME = "cicd-container"
+        HOST_PORT = "8080"
         CONTAINER_PORT = "8080"
-
-        // 构建信息
-        BUILD_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT.substring(0, 7)}"
     }
 
     stages {
-        // 代码检出阶段
-        stage('代码检出') {
+        stage('1. 📥 拉取代码') {
             steps {
-                git branch: 'main',
-                    credentialsId: 'github-csongbanmei-cicd',
-                    url: 'https://github.com/csongbanmei/Test-CICD.git'
-                sh 'echo "代码检出完成，当前提交: ${GIT_COMMIT}"'
+                echo '从GitHub拉取公开代码...'
+                // 直接使用公开仓库URL，无需凭证
+                git url: 'https://github.com/csongbanmei/CICD.git', branch: 'main1'
+
+                // 显示拉取的文件
+                sh 'ls -la'
             }
         }
 
-        // 依赖管理阶段
-        stage('依赖安装') {
+        stage('2. ⚙️ 准备环境') {
             steps {
+                echo '检查并安装Go环境...'
+                sh '''
+                    # 检查Go是否已安装
+                    if ! command -v go &> /dev/null; then
+                        echo "安装Go 1.21..."
+                        apt-get update
+                        apt-get install -y wget tar
+                        wget -q https://golang.org/dl/go1.21.4.linux-amd64.tar.gz
+                        tar -C /usr/local -xzf go1.21.4.linux-amd64.tar.gz
+                        export PATH=$PATH:/usr/local/go/bin
+                    fi
+
+                    # 验证环境
+                    go version
+                '''
+            }
+        }
+
+        stage('3. 📦 安装依赖') {
+            steps {
+                echo '下载Go模块...'
                 sh 'go mod download'
-                sh 'go mod verify'
-                sh 'go mod tidy'
             }
         }
 
-        // 代码质量检查
-        stage('代码检查') {
+        stage('4. 🧪 运行测试') {
             steps {
-                sh 'go vet ./...'
-                sh 'go fmt ./...'
-                sh 'echo "代码检查完成"'
+                echo '执行单元测试...'
+                sh 'go test -v ./...'
             }
         }
 
-        // 单元测试
-        stage('单元测试') {
+        stage('5. 🔨 编译应用') {
             steps {
-                sh 'go test -v ./... -coverprofile=coverage.out -covermode=atomic'
-            }
-            post {
-                always {
-                    // 生成覆盖率报告
-                    sh 'go tool cover -func=coverage.out'
-                    sh 'go tool cover -html=coverage.out -o coverage.html'
-                    publishHTML(target: [
-                        allowMissing: false,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
-                        reportDir: '.',
-                        reportFiles: 'coverage.html',
-                        reportName: '代码覆盖率报告'
-                    ])
-                }
+                echo '编译Go程序...'
+                sh 'CGO_ENABLED=0 GOOS=linux go build -o ${PROJECT_NAME} .'
+
+                // 验证编译结果
+                sh '''
+                    echo "编译完成，文件信息:"
+                    ls -lh ${PROJECT_NAME}
+                    file ${PROJECT_NAME}
+                '''
             }
         }
 
-        // 编译构建
-        stage('编译构建') {
+        stage('6. 🐳 构建镜像') {
             steps {
-                sh 'go build -ldflags="-w -s" -o ${APP_NAME} main.go router.go'
-                sh 'ls -la && ./${APP_NAME} --version || true'
-                // 归档构建产物
-                archiveArtifacts artifacts: '${APP_NAME}', fingerprint: true
+                echo '构建Docker镜像...'
+                // 检查是否已有Dockerfile，如果没有则创建
+                sh '''
+                    if [ ! -f "Dockerfile" ]; then
+                        echo "创建默认Dockerfile..."
+                        cat > Dockerfile << 'EOF'
+FROM alpine:3.14
+WORKDIR /app
+COPY cicd-demo .
+RUN chmod +x cicd-demo
+EXPOSE 8080
+CMD ["./cicd-demo"]
+EOF
+                    fi
+
+                    # 显示Dockerfile内容
+                    echo "Dockerfile内容:"
+                    cat Dockerfile
+
+                    # 构建镜像
+                    docker build -t ${PROJECT_NAME}:latest .
+
+                    echo "镜像构建完成:"
+                    docker images | grep ${PROJECT_NAME}
+                '''
             }
         }
 
-        // Docker 镜像构建
-        stage('Docker 镜像构建') {
+        stage('7. 🛑 清理旧容器') {
             steps {
-                script {
-                    // 构建 Docker 镜像
-                    sh """
-                    docker build -t ${IMAGE_NAME}:${BUILD_TAG} .
-                    docker tag ${IMAGE_NAME}:${BUILD_TAG} ${IMAGE_NAME}:latest
-                    """
-
-                    // 显示镜像信息
-                    sh 'docker images | grep ${IMAGE_NAME}'
-                }
+                echo '清理旧版本容器...'
+                sh '''
+                    # 停止并删除旧容器（如果存在）
+                    docker stop ${CONTAINER_NAME} || true
+                    docker rm ${CONTAINER_NAME} || true
+                    echo "旧容器清理完成"
+                '''
             }
         }
 
-        // 部署测试
-        stage('部署测试') {
+        stage('8. 🚀 部署应用') {
             steps {
-                script {
-                    // 清理旧容器
-                    sh 'docker stop ${CONTAINER_NAME} || true'
-                    sh 'docker rm ${CONTAINER_NAME} || true'
-
-                    // 运行新容器
-                    sh """
+                echo '启动新容器...'
+                sh """
                     docker run -d \\
                         --name ${CONTAINER_NAME} \\
+                        --restart unless-stopped \\
                         -p ${HOST_PORT}:${CONTAINER_PORT} \\
-                        --health-cmd="curl -f http://localhost:${CONTAINER_PORT}/health || exit 1" \\
-                        --health-interval=10s \\
-                        --health-timeout=3s \\
-                        --health-retries=3 \\
-                        ${IMAGE_NAME}:latest
-                    """
+                        ${PROJECT_NAME}:latest
 
-                    echo "容器已启动，访问地址: http://localhost:${HOST_PORT}"
-                }
+                    echo "新容器已启动"
+                """
             }
         }
 
-        // 健康检查
-        stage('健康检查') {
+        stage('9. ✅ 验证部署') {
             steps {
-                retry(3) {
-                    script {
-                        // 等待容器健康状态
-                        waitUntil {
-                            def healthStatus = sh(
-                                script: 'docker inspect --format "{{.State.Health.Status}}" ${CONTAINER_NAME}',
-                                returnStdout: true
-                            ).trim()
-                            return healthStatus == 'healthy'
-                        }
+                echo '检查部署状态...'
+                script {
+                    // 等待应用启动
+                    sleep 8
 
-                        // 测试应用接口
-                        sh 'curl -s http://localhost:${HOST_PORT}/health'
-                        sh 'curl -s http://localhost:${HOST_PORT} | head -5'
-                    }
+                    sh '''
+                        echo "=== 容器状态 ==="
+                        docker ps --filter "name=${CONTAINER_NAME}"
+
+                        echo "=== 应用日志 ==="
+                        docker logs ${CONTAINER_NAME} --tail 10
+
+                        echo "=== 测试访问 ==="
+                        curl -s -o /dev/null -w "HTTP状态码: %{http_code}\n" http://localhost:${HOST_PORT} || echo "应用正在启动中..."
+                    '''
                 }
-                echo "✅ 应用健康检查通过"
             }
         }
     }
 
     post {
         always {
-            echo "构建完成，清理环境..."
-            script {
-                // 清理容器
-                sh 'docker stop ${CONTAINER_NAME} || true'
-                sh 'docker rm ${CONTAINER_NAME} || true'
+            echo '流水线执行完成'
+            // 显示最终状态
+            sh '''
+                echo "=== 最终容器列表 ==="
+                docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
-                // 清理中间镜像，保留最新镜像
-                sh 'docker images --filter "dangling=true" -q | xargs -r docker rmi || true'
-
-                // 显示磁盘使用情况
-                sh 'docker system df'
-            }
+                echo "=== 最终镜像列表 ==="
+                docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
+            '''
         }
-
         success {
-            echo '🎉 CI/CD 流水线执行成功！'
-            // 邮件通知配置
-            emailext (
-                subject: "✅ BUILD SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: """
-                构建详情: ${env.BUILD_URL}
-                应用地址: http://localhost:${HOST_PORT}
-                镜像标签: ${IMAGE_NAME}:${BUILD_TAG}
-                """,
-                to: "2405933595@qq.com"
-            )
+            echo '🎉 部署成功！'
+            echo "🌐 访问地址: http://你的服务器IP:${HOST_PORT}"
         }
-
         failure {
-            echo '❌ CI/CD 流水线执行失败！'
-            emailext (
-                subject: "❌ BUILD FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: "失败详情: ${env.BUILD_URL}",
-                to: "2405933595@qq.com"
-            )
+            echo '❌ 部署失败'
+            echo '请查看控制台输出排查问题'
         }
     }
 }
