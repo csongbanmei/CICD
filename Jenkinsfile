@@ -30,14 +30,14 @@ pipeline {
             steps {
                 script {
                     echo "🚀 开始部署应用..."
-                    # 停止旧容器
+                    // 停止旧容器
                     sh 'docker stop go-app || true'
                     sh 'docker rm go-app || true'
 
-                    # 启动新容器
+                    // 启动新容器
                     sh "docker run -d --name go-app -p 8080:8080 ${IMAGE_TAG}"
 
-                    # 清理旧镜像
+                    // 清理旧镜像
                     sh 'docker image prune -f --filter "until=24h"'
                 }
             }
