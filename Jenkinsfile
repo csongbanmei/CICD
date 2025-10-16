@@ -18,7 +18,6 @@ pipeline {
             steps {
                 script {
                     echo "🚧 构建镜像并在 Builder 阶段跑测试..."
-                    // 构建镜像并在 builder 阶段跑测试
                     sh '''
                     DOCKER_BUILDKIT=0 docker build -t ${IMAGE_TAG} -f Dockerfile .
                     '''
@@ -30,12 +29,11 @@ pipeline {
             steps {
                 script {
                     echo "🚀 部署应用..."
-                    // 停止旧容器（go-app）
+
+                    // 停止并删除旧容器（存在就删除）
                     sh '''
-                    OLD_CONTAINER=$(docker ps -q -f "name=go-app")
-                    if [ ! -z "$OLD_CONTAINER" ]; then
-                        docker stop $OLD_CONTAINER
-                        docker rm $OLD_CONTAINER
+                    if [ $(docker ps -aq -f name=go-app) ]; then
+                        docker rm -f go-app
                     fi
                     '''
 
