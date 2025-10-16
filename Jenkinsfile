@@ -14,11 +14,11 @@ pipeline {
             }
         }
 
-        stage('Build Image') {
+        stage('Build & Test') {
             steps {
                 script {
-                    echo "🚧 开始构建镜像..."
-                    // 禁用 BuildKit，避免 Jenkins 报错
+                    echo "🚧 构建镜像并在 Builder 阶段跑测试..."
+                    // 构建镜像并在 builder 阶段跑测试
                     sh '''
                     DOCKER_BUILDKIT=0 docker build -t ${IMAGE_TAG} -f Dockerfile .
                     '''
@@ -29,13 +29,18 @@ pipeline {
         stage('Deploy') {
             steps {
                 script {
-                    echo "🚀 开始部署应用..."
-                    // 停止旧容器
-                    sh 'docker stop go-app || true'
-                    sh 'docker rm go-app || true'
+                    echo "🚀 部署应用..."
+                    // 停止旧容器（go-app）
+                    sh '''
+                    OLD_CONTAINER=$(docker ps -q -f "name=go-app")
+                    if [ ! -z "$OLD_CONTAINER" ]; then
+                        docker stop $OLD_CONTAINER
+                        docker rm $OLD_CONTAINER
+                    fi
+                    '''
 
-                    // 启动新容器
-                    sh "docker run -d --name go-app -p 8080:8080 ${IMAGE_TAG}"
+                    // 启动新容器，宿主机端口 8081 映射到容器 8080
+                    sh "docker run -d --name go-app -p 8081:8080 ${IMAGE_TAG}"
 
                     // 清理旧镜像
                     sh 'docker image prune -f --filter "until=24h"'
@@ -46,7 +51,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ 部署成功！访问地址：http://<你的服务器IP>:8080"
+            echo "✅ 部署成功！访问地址：http://<你的服务器IP>:8081"
         }
         failure {
             echo "❌ 构建失败！请检查日志：${env.BUILD_URL}console"
