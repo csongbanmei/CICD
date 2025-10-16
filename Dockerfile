@@ -1,5 +1,5 @@
 # 阶段1：构建（使用完整 Go 环境）
-FROM golang:1.21-alpine AS builder
+FROM golang:1.24.2-alpine AS builder
 WORKDIR /app
 # 优先复制依赖文件，利用 Docker 缓存加速构建
 COPY go.mod go.sum ./
