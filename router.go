@@ -12,7 +12,7 @@ func SetupRouter() *mux.Router {
 	r := mux.NewRouter()
 	// /hello 路由
 	r.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "踏遍青山人未老，风景这边独好。")
+		fmt.Fprintln(w, "我来测试一下Jenkins的CICD测试流")
 	}).Methods("GET")
 	return r
 }
