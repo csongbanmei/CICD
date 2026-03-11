@@ -1,0 +1,55 @@
+name: Deploy to Aliyun
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Test Build
+        run: go build -v ./...
+
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/cicd
+            
+            # 如果目录为空，先克隆仓库
+            if [ ! -d ".git" ]; then
+              git clone git@github.com:${{ github.repository }}.git .
+            fi
+            
+            # 拉取最新代码
+            git pull origin main
+            
+            # 编译 Go 程序
+            go mod tidy
+            go build -o app main.go
+            
+            # 重启服务（简单方式）
+            if [ -f "app.pid" ]; then
+              kill $(cat app.pid) 2>/dev/null || true
+              sleep 2
+            fi
+            
+            nohup ./app > app.log 2>&1 &
+            echo $! > app.pid
+            
+            echo "✅ 部署完成！"
+            echo "进程状态:"
+            ps aux | grep "./app" | grep -v grep || echo "启动中..."
