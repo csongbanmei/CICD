@@ -1,38 +1,122 @@
-- name: Deploy to Server
-  uses: appleboy/ssh-action@master
-  with:
-    host: ${{ secrets.HOST }}
-    username: ${{ secrets.USERNAME }}
-    key: ${{ secrets.SSH_PRIVATE_KEY }}
-    script: |
-      set -e  # 关键：遇到错误立即停止
-      
-      cd /var/www/cicd
-      
-      # 检查 go 是否安装
-      if ! command -v go &> /dev/null; then
-        echo "❌ 错误：服务器未安装 Go"
-        exit 1
-      fi
-      
-      # 拉取代码
-      if [ ! -d ".git" ]; then
-        git clone git@github.com:${{ github.repository }}.git .
-      fi
-      git pull origin main
-      
-      # 编译（加上错误检查）
-      echo ">>> 编译中..."
-      go mod tidy
-      go build -o app main.go
-      
-      # 重启
-      if [ -f "app.pid" ]; then
-        kill $(cat app.pid) 2>/dev/null || true
-        sleep 2
-      fi
-      
-      nohup ./app > app.log 2>&1 &
-      echo $! > app.pid
-      
-      echo "✅ 部署完成"
+name: Deploy to Aliyun
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Test Build
+        run: |
+          echo ">>> 测试编译..."
+          go build -v ./...
+          echo "✅ 测试编译通过"
+
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script_stop: true  # 关键：SSH 脚本出错时立即停止
+          script: |
+            set -e  # Bash 严格模式：任何命令失败立即退出
+            
+            echo "=========================================="
+            echo "🚀 开始部署到服务器"
+            echo "=========================================="
+            
+            # 检查并安装 Go（如果服务器还没装）
+            if ! command -v go &> /dev/null; then
+              echo "⚠️  服务器未安装 Go，正在自动安装..."
+              cd /tmp
+              wget -q https://go.dev/dl/go1.21.6.linux-amd64.tar.gz
+              tar -C /usr/local -xzf go1.21.6.linux-amd64.tar.gz
+              export PATH=$PATH:/usr/local/go/bin
+              echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+              echo "✅ Go 安装完成: $(go version)"
+            else
+              echo "✅ Go 已安装: $(go version)"
+            fi
+            
+            # 确保环境变量生效
+            export PATH=$PATH:/usr/local/go/bin
+            
+            # 进入工作目录
+            cd /var/www/cicd
+            echo ">>> 当前目录: $(pwd)"
+            
+            # 拉取最新代码
+            echo ">>> 拉取代码..."
+            if [ ! -d ".git" ]; then
+              echo "⚠️  首次部署，克隆仓库..."
+              git clone git@github.com:${{ github.repository }}.git .
+            fi
+            
+            git reset --hard
+            git clean -fd
+            git pull origin main
+            echo "✅ 代码已更新到: $(git rev-parse --short HEAD)"
+            
+            # 编译应用
+            echo ">>> 下载依赖并编译..."
+            go mod tidy
+            go build -ldflags="-s -w" -o app main.go
+            
+            if [ ! -f "app" ]; then
+              echo "❌ 错误：编译失败，未生成 app 文件"
+              exit 1
+            fi
+            echo "✅ 编译成功: $(ls -lh app)"
+            
+            # 赋予执行权限
+            chmod +x app
+            
+            # 优雅重启（先尝试停止旧进程）
+            echo ">>> 重启服务..."
+            if [ -f "app.pid" ]; then
+              OLD_PID=$(cat app.pid)
+              echo "停止旧进程: $OLD_PID"
+              kill $OLD_PID 2>/dev/null || true
+              sleep 2
+              # 强制结束残留进程
+              kill -9 $OLD_PID 2>/dev/null || true
+            fi
+            
+            # 启动新进程
+            nohup ./app > app.log 2>&1 &
+            NEW_PID=$!
+            echo $NEW_PID > app.pid
+            echo "✅ 新进程已启动: $NEW_PID"
+            
+            # 健康检查（等待 3 秒后检查进程是否存活）
+            echo ">>> 健康检查..."
+            sleep 3
+            if ps -p $NEW_PID > /dev/null; then
+              echo "✅ 服务运行正常"
+              echo "进程信息:"
+              ps aux | grep $NEW_PID | grep -v grep
+              echo "日志预览:"
+              tail -n 5 app.log || echo "暂无日志"
+            else
+              echo "❌ 错误：服务启动失败，查看日志:"
+              tail -n 20 app.log
+              exit 1
+            fi
+            
+            echo "=========================================="
+            echo "🎉 部署成功完成！"
+            echo "=========================================="
